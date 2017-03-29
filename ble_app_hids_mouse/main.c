@@ -71,8 +71,8 @@
 #define CENTRAL_LINK_COUNT              0                                          /**< Number of central links used by the application. When changing this number remember to adjust the RAM settings*/
 #define PERIPHERAL_LINK_COUNT           1                                          /**< Number of peripheral links used by the application. When changing this number remember to adjust the RAM settings*/
 
-#define DEVICE_NAME                     "Nordic_Mouse"                             /**< Name of device. Will be included in the advertising data. */
-#define MANUFACTURER_NAME               "NordicSemiconductor"                      /**< Manufacturer. Will be passed to Device Information Service. */
+#define DEVICE_NAME                     "T-Board"                             /**< Name of device. Will be included in the advertising data. */
+#define MANUFACTURER_NAME               "Force Fusion"                      /**< Manufacturer. Will be passed to Device Information Service. */
 
 #define APP_TIMER_PRESCALER             0                                          /**< Value of the RTC1 PRESCALER register. */
 #define APP_TIMER_OP_QUEUE_SIZE         4                                          /**< Size of timer operation queues. */
@@ -107,16 +107,19 @@
 #define SEC_PARAM_MAX_KEY_SIZE          16                                          /**< Maximum encryption key size. */
 
 #define MOVEMENT_SPEED                  5                                           /**< Number of pixels by which the cursor is moved each time a button is pushed. */
-#define INPUT_REPORT_COUNT              3                                           /**< Number of input reports in this application. */
+#define INPUT_REPORT_COUNT              4                                           /**< Number of input reports in this application. */
 #define INPUT_REP_BUTTONS_LEN           3                                           /**< Length of Mouse Input Report containing button data. */
 #define INPUT_REP_MOVEMENT_LEN          3                                           /**< Length of Mouse Input Report containing movement data. */
 #define INPUT_REP_MEDIA_PLAYER_LEN      1                                           /**< Length of Mouse Input Report containing media player data. */
+#define INPUT_REP_DIGITIZER_LEN		      6                                           /**< Length of Mouse Input Report containing media player data. */
 #define INPUT_REP_BUTTONS_INDEX         0                                           /**< Index of Mouse Input Report containing button data. */
 #define INPUT_REP_MOVEMENT_INDEX        1                                           /**< Index of Mouse Input Report containing movement data. */
 #define INPUT_REP_MPLAYER_INDEX         2                                           /**< Index of Mouse Input Report containing media player data. */
+#define INPUT_REP_DIGITIZER_INDEX       3                                           /**< Index of Mouse Input Report containing media player data. */
 #define INPUT_REP_REF_BUTTONS_ID        1                                           /**< Id of reference to Mouse Input Report containing button data. */
 #define INPUT_REP_REF_MOVEMENT_ID       2                                           /**< Id of reference to Mouse Input Report containing movement data. */
 #define INPUT_REP_REF_MPLAYER_ID        3                                           /**< Id of reference to Mouse Input Report containing media player data. */
+#define INPUT_REP_REF_DIGITIZER_ID      4                                           /**< Id of reference to Mouse Input Report containing media player data. */
 
 #define BASE_USB_HID_SPEC_VERSION       0x0101                                      /**< Version number of base USB HID Specification implemented by this application. */
 
@@ -444,7 +447,7 @@ static void gap_params_init(void)
                                           strlen(DEVICE_NAME));
     APP_ERROR_CHECK(err_code);
 
-    err_code = sd_ble_gap_appearance_set(BLE_APPEARANCE_HID_MOUSE);
+    err_code = sd_ble_gap_appearance_set(BLE_APPEARANCE_GENERIC_HID);
     APP_ERROR_CHECK(err_code);
 
     memset(&gap_conn_params, 0, sizeof(gap_conn_params));
@@ -527,76 +530,119 @@ static void hids_init(void)
 
         0xA1, 0x01, // Collection (Application)
 
-        // Report ID 1: Mouse buttons + scroll/pan
-        0x85, 0x01,       // Report Id 1
-        0x09, 0x01,       // Usage (Pointer)
-        0xA1, 0x00,       // Collection (Physical)
-        0x95, 0x05,       // Report Count (3)
-        0x75, 0x01,       // Report Size (1)
-        0x05, 0x09,       // Usage Page (Buttons)
-        0x19, 0x01,       // Usage Minimum (01)
-        0x29, 0x05,       // Usage Maximum (05)
-        0x15, 0x00,       // Logical Minimum (0)
-        0x25, 0x01,       // Logical Maximum (1)
-        0x81, 0x02,       // Input (Data, Variable, Absolute)
-        0x95, 0x01,       // Report Count (1)
-        0x75, 0x03,       // Report Size (3)
-        0x81, 0x01,       // Input (Constant) for padding
-        0x75, 0x08,       // Report Size (8)
-        0x95, 0x01,       // Report Count (1)
-        0x05, 0x01,       // Usage Page (Generic Desktop)
-        0x09, 0x38,       // Usage (Wheel)
-        0x15, 0x81,       // Logical Minimum (-127)
-        0x25, 0x7F,       // Logical Maximum (127)
-        0x81, 0x06,       // Input (Data, Variable, Relative)
-        0x05, 0x0C,       // Usage Page (Consumer)
-        0x0A, 0x38, 0x02, // Usage (AC Pan)
-        0x95, 0x01,       // Report Count (1)
-        0x81, 0x06,       // Input (Data,Value,Relative,Bit Field)
-        0xC0,             // End Collection (Physical)
+					// Report ID 1: Mouse buttons + scroll/pan
+					0x85, 0x01,       // Report Id 1
+					0x09, 0x01,       // Usage (Pointer)
+					0xA1, 0x00,       // Collection (Physical)
+						0x95, 0x05,       // Report Count (3)
+						0x75, 0x01,       // Report Size (1)
 
-        // Report ID 2: Mouse motion
-        0x85, 0x02,       // Report Id 2
-        0x09, 0x01,       // Usage (Pointer)
-        0xA1, 0x00,       // Collection (Physical)
-        0x75, 0x0C,       // Report Size (12)
-        0x95, 0x02,       // Report Count (2)
-        0x05, 0x01,       // Usage Page (Generic Desktop)
-        0x09, 0x30,       // Usage (X)
-        0x09, 0x31,       // Usage (Y)
-        0x16, 0x01, 0xF8, // Logical maximum (2047)
-        0x26, 0xFF, 0x07, // Logical minimum (-2047)
-        0x81, 0x06,       // Input (Data, Variable, Relative)
-        0xC0,             // End Collection (Physical)
+						0x05, 0x09,       // Usage Page (Buttons)
+						0x19, 0x01,       // Usage Minimum (01)
+						0x29, 0x05,       // Usage Maximum (05)
+						0x15, 0x00,       // Logical Minimum (0)
+						0x25, 0x01,       // Logical Maximum (1)
+
+						0x81, 0x02,       // Input (Data, Variable, Absolute)
+
+						0x95, 0x01,       // Report Count (1)
+						0x75, 0x03,       // Report Size (3)
+						0x81, 0x01,       // Input (Constant) for padding
+
+						0x75, 0x08,       // Report Size (8)
+						0x95, 0x01,       // Report Count (1)
+
+						0x05, 0x01,       // Usage Page (Generic Desktop)
+						0x09, 0x38,       // Usage (Wheel)
+						0x15, 0x81,       // Logical Minimum (-127)
+						0x25, 0x7F,       // Logical Maximum (127)
+
+						0x81, 0x06,       // Input (Data, Variable, Relative)
+
+						0x05, 0x0C,       // Usage Page (Consumer)
+						0x0A, 0x38, 0x02, // Usage (AC Pan)
+
+						0x95, 0x01,       // Report Count (1)
+						0x81, 0x06,       // Input (Data,Value,Relative,Bit Field)
+					0xC0,             // End Collection (Physical)
+
+					// Report ID 2: Mouse motion
+					0x85, 0x02,       // Report Id 2
+					0x09, 0x01,       // Usage (Pointer)
+					0xA1, 0x00,       // Collection (Physical)
+						0x75, 0x0C,       // Report Size (12)
+						0x95, 0x02,       // Report Count (2)
+
+						0x05, 0x01,       // Usage Page (Generic Desktop)
+						0x09, 0x30,       // Usage (X)
+						0x09, 0x31,       // Usage (Y)
+
+						0x16, 0x01, 0xF8, // Logical maximum (2047)
+						0x26, 0xFF, 0x07, // Logical minimum (-2047)
+
+						0x81, 0x06,       // Input (Data, Variable, Relative)
+					0xC0,             // End Collection (Physical)
         0xC0,             // End Collection (Application)
 
         // Report ID 3: Advanced buttons
         0x05, 0x0C,       // Usage Page (Consumer)
         0x09, 0x01,       // Usage (Consumer Control)
-        0xA1, 0x01,       // Collection (Application)
-        0x85, 0x03,       // Report Id (3)
-        0x15, 0x00,       // Logical minimum (0)
-        0x25, 0x01,       // Logical maximum (1)
-        0x75, 0x01,       // Report Size (1)
-        0x95, 0x01,       // Report Count (1)
 
-        0x09, 0xCD,       // Usage (Play/Pause)
-        0x81, 0x06,       // Input (Data,Value,Relative,Bit Field)
-        0x0A, 0x83, 0x01, // Usage (AL Consumer Control Configuration)
-        0x81, 0x06,       // Input (Data,Value,Relative,Bit Field)
-        0x09, 0xB5,       // Usage (Scan Next Track)
-        0x81, 0x06,       // Input (Data,Value,Relative,Bit Field)
-        0x09, 0xB6,       // Usage (Scan Previous Track)
-        0x81, 0x06,       // Input (Data,Value,Relative,Bit Field)
+				0xA1, 0x01,       // Collection (Application)
+					0x85, 0x03,       // Report Id (3)
 
-        0x09, 0xEA,       // Usage (Volume Down)
-        0x81, 0x06,       // Input (Data,Value,Relative,Bit Field)
-        0x09, 0xE9,       // Usage (Volume Up)
-        0x81, 0x06,       // Input (Data,Value,Relative,Bit Field)
-        0x0A, 0x25, 0x02, // Usage (AC Forward)
-        0x81, 0x06,       // Input (Data,Value,Relative,Bit Field)
-        0x0A, 0x24, 0x02, // Usage (AC Back)
-        0x81, 0x06,       // Input (Data,Value,Relative,Bit Field)
+					0x15, 0x00,       // Logical minimum (0)
+					0x25, 0x01,       // Logical maximum (1)
+
+					0x75, 0x01,       // Report Size (1)
+					0x95, 0x01,       // Report Count (1)
+
+					0x09, 0xCD,       // Usage (Play/Pause)
+					0x81, 0x06,       // Input (Data,Value,Relative,Bit Field)
+
+					0x0A, 0x83, 0x01, // Usage (AL Consumer Control Configuration)
+					0x81, 0x06,       // Input (Data,Value,Relative,Bit Field)
+
+					0x09, 0xB5,       // Usage (Scan Next Track)
+					0x81, 0x06,       // Input (Data,Value,Relative,Bit Field)
+
+					0x09, 0xB6,       // Usage (Scan Previous Track)
+					0x81, 0x06,       // Input (Data,Value,Relative,Bit Field)
+
+					0x09, 0xEA,       // Usage (Volume Down)
+					0x81, 0x06,       // Input (Data,Value,Relative,Bit Field)
+
+					0x09, 0xE9,       // Usage (Volume Up)
+					0x81, 0x06,       // Input (Data,Value,Relative,Bit Field)
+
+					0x0A, 0x25, 0x02, // Usage (AC Forward)
+					0x81, 0x06,       // Input (Data,Value,Relative,Bit Field)
+
+					0x0A, 0x24, 0x02, // Usage (AC Back)
+					0x81, 0x06,       // Input (Data,Value,Relative,Bit Field)
+        0xC0,              // End Collection
+
+        // Report ID 4: Digitizer (Touchpad)
+        0x05, 0x0D,       // Usage Page (Digitizer)
+        0x09, 0x05,       // Usage (Touchpad)
+
+				0xA1, 0x01,       // Collection (Application)
+
+					0x09, 0x22,       // Usage (Pointer)
+					0xA1, 0x00,       // Collection (Physical)
+						0x85, 0x04,       // Report Id (4)
+
+						0x75, 0x0C,       // Report Size (16)
+						0x95, 0x02,       // Report Count (3)
+
+						0x05, 0x01,       // Usage Page (Generic Desktop)
+						0x09, 0x30,       // Usage (X)
+						0x09, 0x31,       // Usage (Y)
+						0x09, 0x32,       // Usage (Z)
+						0x16, 0x01, 0xF8, // Logical maximum (2047)
+						0x26, 0xFF, 0x07, // Logical minimum (-2047)
+						0x81, 0x06,       // Input (Data, Variable, Relative)
+					0xC0,             // End Collection (Physical)
         0xC0              // End Collection
     };
 
@@ -623,6 +669,15 @@ static void hids_init(void)
     p_input_report                      = &inp_rep_array[INPUT_REP_MPLAYER_INDEX];
     p_input_report->max_len             = INPUT_REP_MEDIA_PLAYER_LEN;
     p_input_report->rep_ref.report_id   = INPUT_REP_REF_MPLAYER_ID;
+    p_input_report->rep_ref.report_type = BLE_HIDS_REP_TYPE_INPUT;
+
+    BLE_GAP_CONN_SEC_MODE_SET_ENC_NO_MITM(&p_input_report->security_mode.cccd_write_perm);
+    BLE_GAP_CONN_SEC_MODE_SET_ENC_NO_MITM(&p_input_report->security_mode.read_perm);
+    BLE_GAP_CONN_SEC_MODE_SET_ENC_NO_MITM(&p_input_report->security_mode.write_perm);
+
+    p_input_report                      = &inp_rep_array[INPUT_REP_DIGITIZER_INDEX];
+    p_input_report->max_len             = INPUT_REP_DIGITIZER_LEN;
+    p_input_report->rep_ref.report_id   = INPUT_REP_REF_DIGITIZER_ID;
     p_input_report->rep_ref.report_type = BLE_HIDS_REP_TYPE_INPUT;
 
     BLE_GAP_CONN_SEC_MODE_SET_ENC_NO_MITM(&p_input_report->security_mode.cccd_write_perm);
@@ -1224,6 +1279,7 @@ static void mouse_movement_send(int16_t x_delta, int16_t y_delta)
  */
 static void bsp_event_handler(bsp_event_t event)
 {
+		uint8_t buffer;
     uint32_t err_code;
 
     switch (event)
@@ -1262,7 +1318,18 @@ static void bsp_event_handler(bsp_event_t event)
         case BSP_EVENT_KEY_1:
             if (m_conn_handle != BLE_CONN_HANDLE_INVALID)
             {
-                mouse_movement_send(0, -MOVEMENT_SPEED);
+                //mouse_movement_send(0, -MOVEMENT_SPEED);
+
+								buffer = 1 << 5;
+								ble_hids_inp_rep_send(&m_hids,
+											 INPUT_REP_MPLAYER_INDEX,
+											 INPUT_REP_MEDIA_PLAYER_LEN,
+											 &buffer);
+								buffer = 0;
+								ble_hids_inp_rep_send(&m_hids,
+											 INPUT_REP_MPLAYER_INDEX,
+											 INPUT_REP_MEDIA_PLAYER_LEN,
+											 &buffer);							
             }
             break;
 
@@ -1276,7 +1343,25 @@ static void bsp_event_handler(bsp_event_t event)
         case BSP_EVENT_KEY_3:
             if (m_conn_handle != BLE_CONN_HANDLE_INVALID)
             {
-                mouse_movement_send(0, MOVEMENT_SPEED);
+                //mouse_movement_send(0, MOVEMENT_SPEED);
+								/*
+								buffer = 1 << 4;
+								ble_hids_inp_rep_send(&m_hids,
+											 INPUT_REP_MPLAYER_INDEX,
+											 INPUT_REP_MEDIA_PLAYER_LEN,
+											 &buffer);
+								buffer = 0;
+								ble_hids_inp_rep_send(&m_hids,
+											 INPUT_REP_MPLAYER_INDEX,
+											 INPUT_REP_MEDIA_PLAYER_LEN,
+											 &buffer);
+								*/
+								uint8_t buf[6] = {255};
+								ble_hids_inp_rep_send(&m_hids,
+											 INPUT_REP_DIGITIZER_INDEX,
+											 INPUT_REP_DIGITIZER_LEN,
+											 buf);
+							
             }
             break;
 
