@@ -39,104 +39,41 @@
 #include "nrf_log.h"
 #include "nrf_log_ctrl.h"
 
-#define SCAN_RATE	40		// (Hz)
 #define APP_TIMER_PRESCALER             0                                           /**< Value of the RTC1 PRESCALER register. */
 #define APP_TIMER_OP_QUEUE_SIZE         4                                           /**< Size of timer operation queues. */
 #define TIMER_INTERVAL APP_TIMER_TICKS(1000 / SCAN_RATE, APP_TIMER_PRESCALER)
 
-APP_TIMER_DEF(m_app_timer_id);
+#define SCAN_RATE	40		// (Hz)
+#define ROWS 16
+#define COLS 24
+#define TACT_BUF_SZ ROWS * COLS
+#define TOUCH_SQR_SZ 5	// odd number only, minimum = 3
+#define REPORT_SCALE 2048
 
-#define DOUT_LINES 24
+#define DOUT_LINES COLS
 #define STCP ARDUINO_8_PIN
 #define SHCP ARDUINO_9_PIN
 #define DS ARDUINO_10_PIN
 #define LOW 0
 #define HIGH 1
 
-nrf_saadc_value_t tact[24][16] = {0};
+#define OFFSET(x, y) (x - y > 0 ? x - y : 0)
+
+#define FLOATING_BUF_SIZE 5
+static uint16_t tact_buf[COLS][ROWS];
+static nrf_saadc_value_t floating_buf[FLOATING_BUF_SIZE][COLS][ROWS];
+static uint8_t floating_buf_idx = 0;
+static uint16_t touch_sqr_buf[TOUCH_SQR_SZ][TOUCH_SQR_SZ];
+static uint16_t scan_counter = 0;
 
 #define SAMPLES_IN_BUFFER 1
 volatile uint8_t state = 1;
-
-static const nrf_drv_timer_t m_timer = NRF_DRV_TIMER_INSTANCE(0);
-//static nrf_saadc_value_t     m_buffer_pool[2][SAMPLES_IN_BUFFER];
-static nrf_ppi_channel_t     m_ppi_channel;
-static uint32_t              m_adc_evt_counter;
-
-static uint16_t m_scan_times = 0;
-
-#define MEASURE_SCANTIME
-#define PRINT_SCAN_BUFFER
-//#define SINGLE_SHOT_SCAN
-
-void timer_handler(nrf_timer_event_t event_type, void * p_context)
-{
-
-}
-
-
-void saadc_sampling_event_init(void)
-{
-    ret_code_t err_code;
-
-    err_code = nrf_drv_ppi_init();
-    APP_ERROR_CHECK(err_code);
-
-    nrf_drv_timer_config_t timer_cfg = NRF_DRV_TIMER_DEFAULT_CONFIG;
-    timer_cfg.bit_width = NRF_TIMER_BIT_WIDTH_32;
-    err_code = nrf_drv_timer_init(&m_timer, &timer_cfg, timer_handler);
-    APP_ERROR_CHECK(err_code);
-
-    /* setup m_timer for compare event every 400ms */
-    uint32_t ticks = nrf_drv_timer_ms_to_ticks(&m_timer, 400);
-    nrf_drv_timer_extended_compare(&m_timer,
-                                   NRF_TIMER_CC_CHANNEL0,
-                                   ticks,
-                                   NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK,
-                                   false);
-    nrf_drv_timer_enable(&m_timer);
-
-    uint32_t timer_compare_event_addr = nrf_drv_timer_compare_event_address_get(&m_timer,
-                                                                                NRF_TIMER_CC_CHANNEL0);
-    uint32_t saadc_sample_task_addr   = nrf_drv_saadc_sample_task_get();
-
-    /* setup ppi channel so that timer compare event is triggering sample task in SAADC */
-    err_code = nrf_drv_ppi_channel_alloc(&m_ppi_channel);
-    APP_ERROR_CHECK(err_code);
-
-    err_code = nrf_drv_ppi_channel_assign(m_ppi_channel,
-                                          timer_compare_event_addr,
-                                          saadc_sample_task_addr);
-    APP_ERROR_CHECK(err_code);
-}
-
-
-void saadc_sampling_event_enable(void)
-{
-    ret_code_t err_code = nrf_drv_ppi_channel_enable(m_ppi_channel);
-
-    APP_ERROR_CHECK(err_code);
-}
+APP_TIMER_DEF(m_app_timer_id);
 
 
 void saadc_callback(nrf_drv_saadc_evt_t const * p_event)
 {
-    if (p_event->type == NRF_DRV_SAADC_EVT_DONE)
-    {
-        ret_code_t err_code;
 
-        err_code = nrf_drv_saadc_buffer_convert(p_event->data.done.p_buffer, SAMPLES_IN_BUFFER);
-        APP_ERROR_CHECK(err_code);
-
-        int i;
-        NRF_LOG_INFO("ADC event number: %d\r\n", (int)m_adc_evt_counter);
-
-        for (i = 0; i < SAMPLES_IN_BUFFER; i++)
-        {
-            NRF_LOG_INFO("%d\r\n", p_event->data.done.p_buffer[i]);
-        }
-        m_adc_evt_counter++;
-    }
 }
 
 
@@ -206,66 +143,118 @@ void exp_io_in_inc(int sel_start, int sel_end) {
 	}
 }
 
+
+bool is_highest_node(uint16_t* ptr, int i, int j)
+{
+		bool ret = true;
+		int16_t offset = (TOUCH_SQR_SZ - 1) / 2;
+		int16_t cur_pos = (i * ROWS) + j;
+		int16_t lowest_corner = cur_pos - offset - (ROWS * offset);
+		uint16_t cur_node_val = *(ptr + cur_pos);
+
+		memset(touch_sqr_buf, 0, sizeof(touch_sqr_buf));
+	
+		for (int m = 0; m < TOUCH_SQR_SZ; m++) {
+			for (int n = 0; n < TOUCH_SQR_SZ; n++) {
+				int16_t comp_node = lowest_corner + (m * ROWS) + n;
+
+				if (comp_node < 0 || comp_node == cur_pos) continue;
+				if (comp_node >= TACT_BUF_SZ) break;
+				
+				uint16_t comp_node_val = *(ptr + comp_node);
+				ret &= comp_node < cur_pos ? cur_node_val > comp_node_val : cur_node_val >= comp_node_val;
+
+				if (ret) { touch_sqr_buf[m][n] = comp_node_val; }
+				else { return false; }
+			}
+		}
+		
+		touch_sqr_buf[(TOUCH_SQR_SZ -  1) / 2][(TOUCH_SQR_SZ - 1) / 2] = cur_node_val;
+		return true;
+}
+
+
 void scan_sensors() {
-#ifdef MEASURE_SCANTIME
-		int x = app_timer_cnt_get();
-#endif
-	
 	int j;
+	bool col_sampled[COLS];
+	memset(col_sampled, 0, sizeof(col_sampled) / 8);
+
+	if (scan_counter % SCAN_RATE == 0) NRF_LOG_RAW_INFO("SCAN-%d: \r\n", scan_counter);
 	
-	for (int i = 0; i < 24; i++) {
+	for (int i = 0; i < COLS; i++) {
 		j = 0;
 		exp_io_out_sel(i);
 
-		while (j < 16) {
-			nrf_saadc_value_t val;
+		while (j < ROWS) {
 			nrf_drv_saadc_sample();
-			nrf_drv_saadc_sample_convert(0, &val);
-			val -=95;
-			tact[i][j] = val < 0 ? 0 : val;
+			nrf_drv_saadc_sample_convert(0, &floating_buf[floating_buf_idx % FLOATING_BUF_SIZE][i][j]);
+
+			nrf_saadc_value_t floating_buf_sum = 0;
+			for (int x = 0; x < FLOATING_BUF_SIZE; x++) { floating_buf_sum += floating_buf[x][i][j]; }
+			tact_buf[i][j] = OFFSET(floating_buf_sum / FLOATING_BUF_SIZE, 95);
+			col_sampled[i] |= tact_buf[i][j] > 0;
+
+			if (tact_buf[i][j] > 0 && scan_counter % SCAN_RATE == 0) {
+				NRF_LOG_RAW_INFO("(%d, %d) = %d\r\n", scan_counter, i, j, tact_buf[i][j]);
+			}
+
 			exp_io_in_inc(ARDUINO_4_PIN, ARDUINO_7_PIN);
 			j++;
 		}
 	}
-#ifdef SINGLE_SHOT_SCAN
-#ifdef MEASURE_SCANTIME
-		int y = app_timer_cnt_get();
-		NRF_LOG_RAW_INFO("Scan Time: (%d - %d) = %d (%d ms)\r\n", y, x, x - y, (y - x)/32);
-#endif
-#endif
 
-#ifdef SINGLE_SHOT_SCAN	
-#ifdef PRINT_SCAN_BUFFER
-		for (int j = 16; j >= 0; j--) {
-			if (j > 15) {
-				NRF_LOG_RAW_INFO("--\t");
-			}
-			else {
-				NRF_LOG_RAW_INFO("%d\t", j);
-			}
 
-			for (int i = 0; i < 24; i++) {
-				if (j > 15) {
-					NRF_LOG_RAW_INFO("%d\t", i);
-				}
-				else {
-					NRF_LOG_RAW_INFO("%d\t", tact[i][j]);
+	for (int i = 0; i < COLS; i++) {
+		if (col_sampled[i]) {
+			for (int j = 0; j < ROWS; j++) {
+				if (tact_buf[i][j] > 0) {
+					if (is_highest_node(&tact_buf[0][0], i, j)) {
+							uint16_t total_force = 0;
+							float hDelta = 0, vDelta = 0;
+
+							for (int m = 0; m < TOUCH_SQR_SZ; m++) {
+								uint16_t vSum = 0, hSum = 0;
+								for (int n = 0; n < TOUCH_SQR_SZ; n++) {
+									total_force += touch_sqr_buf[m][n];
+									hSum += touch_sqr_buf[m][n];
+									vSum += touch_sqr_buf[n][m];
+								}
+
+								hDelta += 1.0 * hSum * m / (TOUCH_SQR_SZ - 1);
+								vDelta += 1.0 * vSum * m / (TOUCH_SQR_SZ - 1);
+							}						
+
+							uint16_t posx = (i + hDelta / total_force * 2 - 1) * (1.0 * (REPORT_SCALE - 1) / (COLS - 1));
+							uint16_t posy = (j + vDelta / total_force * 2 - 1) * (((REPORT_SCALE - 1) * (1.0 * ROWS / COLS))/ (ROWS - 1));
+
+							if (scan_counter % SCAN_RATE == 0) 	{
+								NRF_LOG_RAW_INFO("CENTER=: (%d, %d) / (%d, %d)\r\n", i, j, posx, posy);
+								//NRF_LOG_RAW_INFO("("  NRF_LOG_FLOAT_MARKER ", " NRF_LOG_FLOAT_MARKER ")\r\n", NRF_LOG_FLOAT(posx), NRF_LOG_FLOAT(posy));
+								//NRF_LOG_RAW_INFO("POS=: (%d, %d)\r\n", posx * (1.0 * (REPORT_SCALE - 1) / (COLS - 1)), posy * (((REPORT_SCALE - 1) * (1.0 * ROWS / COLS))/ (ROWS - 1)));
+								/*
+								NRF_LOG_RAW_INFO("HF/VF/TF=: " NRF_LOG_FLOAT_MARKER " / " NRF_LOG_FLOAT_MARKER " / %d\r\n", NRF_LOG_FLOAT(hDelta), NRF_LOG_FLOAT(vDelta), total_force);
+								for (int m = 0; m < TOUCH_SQR_SZ; m++) {
+									for (int n = 0; n < TOUCH_SQR_SZ; n++) {
+										NRF_LOG_RAW_INFO("%d\t", touch_sqr_buf[m][n]);
+									}
+									NRF_LOG_RAW_INFO("\r\n", i, j);
+								}
+								*/
+							}
+					}
 				}
 			}
-			NRF_LOG_RAW_INFO("\r\n");
-		        NRF_LOG_FLUSH();
 		}
-		NRF_LOG_RAW_INFO("\r\n");
-    NRF_LOG_FLUSH();
-#endif
-#endif
+	}
+	if (scan_counter % SCAN_RATE == 0) NRF_LOG_RAW_INFO("\r\n");
+
+	floating_buf_idx++;
+	scan_counter++;
 }
 
-void timer_timeout_handler(void * p_context) {
-#ifndef SINGLE_SHOT_SCAN
+void timer_timeout_handler(void * p_context) 
+{
 	scan_sensors();
-	NRF_LOG_INFO("Scan times = %d\r\n", m_scan_times++);
-#endif
 }
 
 /**@brief Function for the Timer initialization.
@@ -320,16 +309,10 @@ int main(void)
     NRF_LOG_INFO("SAADC HAL simple example.\r\n");
     NRF_LOG_FLUSH();
     saadc_init();
-    //saadc_sampling_event_init();
-    //saadc_sampling_event_enable();
 		exp_io_init();
 	
 		application_timer_init();
 		application_timers_start();
-
-#ifdef SINGLE_SHOT_SCAN
-		scan_sensors();
-#endif
 	
     while (1)
     {
