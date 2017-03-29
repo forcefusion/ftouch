@@ -43,7 +43,8 @@
 #define APP_TIMER_OP_QUEUE_SIZE         4                                           /**< Size of timer operation queues. */
 #define TIMER_INTERVAL APP_TIMER_TICKS(1000 / SCAN_RATE, APP_TIMER_PRESCALER)
 
-#define SCAN_RATE	40		// (Hz)
+#define SCAN_RATE	100		// (Hz)
+#define OFFSET_VALUE 45
 #define ROWS 16
 #define COLS 24
 #define TACT_BUF_SZ ROWS * COLS
@@ -59,7 +60,7 @@
 
 #define OFFSET(x, y) (x - y > 0 ? x - y : 0)
 
-#define FLOATING_BUF_SIZE 5
+#define FLOATING_BUF_SIZE 4
 static uint16_t tact_buf[COLS][ROWS];
 static nrf_saadc_value_t floating_buf[FLOATING_BUF_SIZE][COLS][ROWS];
 static uint8_t floating_buf_idx = 0;
@@ -191,11 +192,11 @@ void scan_sensors() {
 
 			nrf_saadc_value_t floating_buf_sum = 0;
 			for (int x = 0; x < FLOATING_BUF_SIZE; x++) { floating_buf_sum += floating_buf[x][i][j]; }
-			tact_buf[i][j] = OFFSET(floating_buf_sum / FLOATING_BUF_SIZE, 95);
+			tact_buf[i][j] = OFFSET(floating_buf_sum / FLOATING_BUF_SIZE, OFFSET_VALUE);
 			col_sampled[i] |= tact_buf[i][j] > 0;
 
 			if (tact_buf[i][j] > 0 && scan_counter % SCAN_RATE == 0) {
-				NRF_LOG_RAW_INFO("(%d, %d) = %d\r\n", scan_counter, i, j, tact_buf[i][j]);
+				NRF_LOG_RAW_INFO("(%d, %d) = %d\r\n", i, j, tact_buf[i][j]);
 			}
 
 			exp_io_in_inc(ARDUINO_4_PIN, ARDUINO_7_PIN);
