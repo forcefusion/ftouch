@@ -39,12 +39,20 @@
 #include "nrf_log.h"
 #include "nrf_log_ctrl.h"
 
+typedef struct
+{
+    uint32_t               frame_id;
+		uint16_t							 x;
+		uint16_t							 y;
+		uint16_t							 z;
+} touch_event_t;
+
 #define APP_TIMER_PRESCALER             0                                           /**< Value of the RTC1 PRESCALER register. */
 #define APP_TIMER_OP_QUEUE_SIZE         4                                           /**< Size of timer operation queues. */
 #define TIMER_INTERVAL APP_TIMER_TICKS(1000 / SCAN_RATE, APP_TIMER_PRESCALER)
 
 #define SCAN_RATE	100		// (Hz)
-#define OFFSET_VALUE 45
+#define OFFSET_VALUE 65
 #define ROWS 16
 #define COLS 24
 #define TACT_BUF_SZ ROWS * COLS
@@ -60,12 +68,19 @@
 
 #define OFFSET(x, y) (x - y > 0 ? x - y : 0)
 
-#define FLOATING_BUF_SIZE 4
+#define FLOATING_BUF_SIZE 2
 static uint16_t tact_buf[COLS][ROWS];
 static nrf_saadc_value_t floating_buf[FLOATING_BUF_SIZE][COLS][ROWS];
 static uint8_t floating_buf_idx = 0;
 static uint16_t touch_sqr_buf[TOUCH_SQR_SZ][TOUCH_SQR_SZ];
-static uint16_t scan_counter = 0;
+static uint32_t scan_counter = 0;
+
+touch_event_t last_touch = {
+	.frame_id = 0,
+	.x = 0,
+	.y = 0,
+	.z = 0
+};
 
 #define SAMPLES_IN_BUFFER 1
 volatile uint8_t state = 1;
@@ -85,6 +100,7 @@ void saadc_init(void)
 		nrf_drv_saadc_config_t saadc_config = NRF_DRV_SAADC_DEFAULT_CONFIG;
 		saadc_config.resolution = NRF_SAADC_RESOLUTION_12BIT;
 		//saadc_config.oversample = NRF_SAADC_OVERSAMPLE_4X;
+
 		err_code = nrf_drv_saadc_init(&saadc_config, saadc_callback);
     APP_ERROR_CHECK(err_code);
 
@@ -92,15 +108,9 @@ void saadc_init(void)
         NRF_DRV_SAADC_DEFAULT_CHANNEL_CONFIG_SE(NRF_SAADC_INPUT_AIN2);
 		channel_config.gain = NRF_SAADC_GAIN1_4;
 		//channe_config.burst = NRF_SAADC_BURST_ENABLED;
-    err_code = nrf_drv_saadc_channel_init(0, &channel_config);
+
+		err_code = nrf_drv_saadc_channel_init(0, &channel_config);
     APP_ERROR_CHECK(err_code);
-
-    //err_code = nrf_drv_saadc_buffer_convert(m_buffer_pool[0], SAMPLES_IN_BUFFER);
-    //APP_ERROR_CHECK(err_code);
-
-    //err_code = nrf_drv_saadc_buffer_convert(m_buffer_pool[1], SAMPLES_IN_BUFFER);
-    //APP_ERROR_CHECK(err_code);
-
 }
 
 void exp_io_init() {
@@ -123,8 +133,11 @@ void exp_io_out_sel(int line) {
 
   for (int i = 0; i < DOUT_LINES; i++) {
     nrf_gpio_pin_write(DS, i == l);
+		nrf_delay_us(1);
 		nrf_gpio_pin_write(SHCP, HIGH);
+		nrf_delay_us(1);
 		nrf_gpio_pin_write(SHCP, LOW);
+		nrf_delay_us(1);
   }
 
   nrf_gpio_pin_write(STCP, HIGH);
@@ -145,7 +158,7 @@ void exp_io_in_inc(int sel_start, int sel_end) {
 }
 
 
-bool is_highest_node(uint16_t* ptr, int i, int j)
+bool is_touch_center(uint16_t* ptr, int i, int j)
 {
 		bool ret = true;
 		int16_t offset = (TOUCH_SQR_SZ - 1) / 2;
@@ -180,8 +193,9 @@ void scan_sensors() {
 	bool col_sampled[COLS];
 	memset(col_sampled, 0, sizeof(col_sampled) / 8);
 
-	if (scan_counter % SCAN_RATE == 0) NRF_LOG_RAW_INFO("SCAN-%d: \r\n", scan_counter);
+	//if (scan_counter % SCAN_RATE == 0) NRF_LOG_RAW_INFO("SCAN-%d: \r\n", scan_counter);
 	
+	// frame sampling
 	for (int i = 0; i < COLS; i++) {
 		j = 0;
 		exp_io_out_sel(i);
@@ -195,24 +209,28 @@ void scan_sensors() {
 			tact_buf[i][j] = OFFSET(floating_buf_sum / FLOATING_BUF_SIZE, OFFSET_VALUE);
 			col_sampled[i] |= tact_buf[i][j] > 0;
 
+			/*
 			if (tact_buf[i][j] > 0 && scan_counter % SCAN_RATE == 0) {
 				NRF_LOG_RAW_INFO("(%d, %d) = %d\r\n", i, j, tact_buf[i][j]);
 			}
-
+			*/
 			exp_io_in_inc(ARDUINO_4_PIN, ARDUINO_7_PIN);
 			j++;
 		}
 	}
 
 
+	// process frame samples
 	for (int i = 0; i < COLS; i++) {
-		if (col_sampled[i]) {
+		if (col_sampled[i]) {				// skip column without samples
 			for (int j = 0; j < ROWS; j++) {
 				if (tact_buf[i][j] > 0) {
-					if (is_highest_node(&tact_buf[0][0], i, j)) {
+					if (is_touch_center(&tact_buf[0][0], i, j)) {
 							uint16_t total_force = 0;
+							uint16_t prev_neighbor_force = 0, next_neighbor_force = 0;
 							float hDelta = 0, vDelta = 0;
 
+							// calculating force center 
 							for (int m = 0; m < TOUCH_SQR_SZ; m++) {
 								uint16_t vSum = 0, hSum = 0;
 								for (int n = 0; n < TOUCH_SQR_SZ; n++) {
@@ -223,13 +241,26 @@ void scan_sensors() {
 
 								hDelta += 1.0 * hSum * m / (TOUCH_SQR_SZ - 1);
 								vDelta += 1.0 * vSum * m / (TOUCH_SQR_SZ - 1);
+								if (m == (TOUCH_SQR_SZ - 1) / 2 - 1) prev_neighbor_force = hSum;
+								else if (m == (TOUCH_SQR_SZ - 1) / 2 + 1) next_neighbor_force = hSum;
 							}						
 
-							uint16_t posx = (i + hDelta / total_force * 2 - 1) * (1.0 * (REPORT_SCALE - 1) / (COLS - 1));
-							uint16_t posy = (j + vDelta / total_force * 2 - 1) * (((REPORT_SCALE - 1) * (1.0 * ROWS / COLS))/ (ROWS - 1));
+							float hDeviation = hDelta / total_force * 2 - 1;
+							float vDeviation = vDelta / total_force * 2 - 1;
+							uint16_t posx = (i + hDeviation) * (1.0 * (REPORT_SCALE - 1) / (COLS - 1));
+							uint16_t posy = (j + vDeviation) * (((REPORT_SCALE - 1) * (1.0 * ROWS / COLS))/ (ROWS - 1));
+							
+							uint16_t center_force = touch_sqr_buf[(TOUCH_SQR_SZ - 1) / 2][(TOUCH_SQR_SZ - 1) / 2];
+							if (hDeviation > 0) {
+								center_force += hDeviation * (center_force - prev_neighbor_force) / 2;
+							}
+							else if (hDeviation < 0) {
+								center_force -= hDeviation * (center_force - next_neighbor_force) / 2;
+							}
 
-							if (scan_counter % SCAN_RATE == 0) 	{
-								NRF_LOG_RAW_INFO("CENTER=: (%d, %d) / (%d, %d)\r\n", i, j, posx, posy);
+							//if (scan_counter % SCAN_RATE == 0) 	{
+								//NRF_LOG_RAW_INFO("%d =: ", scan_counter);
+								//NRF_LOG_RAW_INFO("(%d, %d, %d) / (%d, %d, %d)\r\n", i, j, touch_sqr_buf[(TOUCH_SQR_SZ - 1) / 2][(TOUCH_SQR_SZ - 1) / 2], posx, posy, center_force);
 								//NRF_LOG_RAW_INFO("("  NRF_LOG_FLOAT_MARKER ", " NRF_LOG_FLOAT_MARKER ")\r\n", NRF_LOG_FLOAT(posx), NRF_LOG_FLOAT(posy));
 								//NRF_LOG_RAW_INFO("POS=: (%d, %d)\r\n", posx * (1.0 * (REPORT_SCALE - 1) / (COLS - 1)), posy * (((REPORT_SCALE - 1) * (1.0 * ROWS / COLS))/ (ROWS - 1)));
 								/*
@@ -241,13 +272,23 @@ void scan_sensors() {
 									NRF_LOG_RAW_INFO("\r\n", i, j);
 								}
 								*/
+							//}
+							
+							if (scan_counter - last_touch.frame_id <= 20) {
+								NRF_LOG_RAW_INFO("MOVE (%d) =: ", scan_counter);
+								NRF_LOG_RAW_INFO("%d, %d\r\n", posx - last_touch.x, posy - last_touch.y);
 							}
+							
+							last_touch.frame_id = scan_counter;
+							last_touch.x = posx;
+							last_touch.y = posy;
+							last_touch.z = center_force;							
 					}
 				}
 			}
 		}
 	}
-	if (scan_counter % SCAN_RATE == 0) NRF_LOG_RAW_INFO("\r\n");
+	//if (scan_counter % SCAN_RATE == 0) NRF_LOG_RAW_INFO("\r\n");
 
 	floating_buf_idx++;
 	scan_counter++;
@@ -281,21 +322,6 @@ static void application_timers_start(void)
 		uint32_t err_code;
     err_code = app_timer_start(m_app_timer_id, TIMER_INTERVAL, NULL);
     APP_ERROR_CHECK(err_code);
-}
-
-
-void task_timer_event_handler(nrf_timer_event_t event_type, void* p_context)
-{
-    switch (event_type)
-    {
-        case NRF_TIMER_EVENT_COMPARE0:
-            scan_sensors();
-            break;
-
-        default:
-            //Do nothing.
-            break;
-    }
 }
 
 
