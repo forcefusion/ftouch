@@ -21,18 +21,19 @@
  * @image html example_board_setup_a.jpg "Use board setup A for this example."
  */
 
-#include <stdbool.h>
-#include <stdint.h>
-#include <stdio.h>
-#include "nrf.h"
+//#include <stdbool.h>
+//#include <stdint.h>
+//#include <stdio.h>
+#include <math.h>
+//#include "nrf.h"
 #include "nrf_drv_saadc.h"
-#include "nrf_drv_ppi.h"
-#include "nrf_drv_timer.h"
+//#include "nrf_drv_ppi.h"
+//#include "nrf_drv_timer.h"
 #include "boards.h"
 #include "app_error.h"
 #include "nrf_delay.h"
-#include "app_util_platform.h"
-#include <string.h>
+//#include "app_util_platform.h"
+//#include <string.h>
 #include "app_timer.h"
 
 #define NRF_LOG_MODULE_NAME "APP"
@@ -41,15 +42,15 @@
 
 typedef struct
 {
-    uint32_t               frame_id;
-		uint16_t							 x;
-		uint16_t							 y;
-		uint16_t							 z;
+    uint32_t           frame_id;
+		float							 x;
+		float							 y;
+		float							 z;
 } touch_event_t;
 
 #define APP_TIMER_PRESCALER             0                                           /**< Value of the RTC1 PRESCALER register. */
 #define APP_TIMER_OP_QUEUE_SIZE         4                                           /**< Size of timer operation queues. */
-#define TIMER_INTERVAL APP_TIMER_TICKS(1000 / SCAN_RATE, APP_TIMER_PRESCALER)
+#define SENSOR_SCAN_INTERVAL APP_TIMER_TICKS(1000 / SCAN_RATE, APP_TIMER_PRESCALER)
 
 #define SCAN_RATE	100		// (Hz)
 #define OFFSET_VALUE 65
@@ -57,7 +58,7 @@ typedef struct
 #define COLS 24
 #define TACT_BUF_SZ ROWS * COLS
 #define TOUCH_SQR_SZ 5	// odd number only, minimum = 3
-#define REPORT_SCALE 2048
+#define REPORT_SCALE 10
 
 #define DOUT_LINES COLS
 #define STCP ARDUINO_8_PIN
@@ -82,8 +83,14 @@ touch_event_t last_touch = {
 	.z = 0
 };
 
+touch_event_t last_move = {
+	.frame_id = 0,
+	.x = 0,
+	.y = 0,
+	.z = 0
+};
+
 #define SAMPLES_IN_BUFFER 1
-volatile uint8_t state = 1;
 APP_TIMER_DEF(m_app_timer_id);
 
 
@@ -113,7 +120,8 @@ void saadc_init(void)
     APP_ERROR_CHECK(err_code);
 }
 
-void exp_io_init() {
+void exp_io_init() 
+{
 		// Output IO Init
 		nrf_gpio_range_cfg_output(ARDUINO_4_PIN, ARDUINO_12_PIN);
 
@@ -123,7 +131,8 @@ void exp_io_init() {
 }
 
 
-void exp_io_out_sel(int line) {
+void exp_io_out_sel(int line)
+{
  
 	if (line > DOUT_LINES -1) return;
 	int l = line < 12 ? 11 - line : line;
@@ -144,7 +153,8 @@ void exp_io_out_sel(int line) {
 }
 
 
-void exp_io_in_inc(int sel_start, int sel_end) {
+void exp_io_in_inc(int sel_start, int sel_end)
+{
 	if (!nrf_gpio_pin_out_read(sel_start)) {
 		nrf_gpio_pin_toggle(sel_start);
 	}
@@ -188,7 +198,8 @@ bool is_touch_center(uint16_t* ptr, int i, int j)
 }
 
 
-void scan_sensors() {
+void scan_sensors()
+{
 	int j;
 	bool col_sampled[COLS];
 	memset(col_sampled, 0, sizeof(col_sampled) / 8);
@@ -247,8 +258,8 @@ void scan_sensors() {
 
 							float hDeviation = hDelta / total_force * 2 - 1;
 							float vDeviation = vDelta / total_force * 2 - 1;
-							uint16_t posx = (i + hDeviation) * (1.0 * (REPORT_SCALE - 1) / (COLS - 1));
-							uint16_t posy = (j + vDeviation) * (((REPORT_SCALE - 1) * (1.0 * ROWS / COLS))/ (ROWS - 1));
+							float posx = (i + hDeviation);
+							float posy = (j + vDeviation);
 							
 							uint16_t center_force = touch_sqr_buf[(TOUCH_SQR_SZ - 1) / 2][(TOUCH_SQR_SZ - 1) / 2];
 							if (hDeviation > 0) {
@@ -258,27 +269,40 @@ void scan_sensors() {
 								center_force -= hDeviation * (center_force - next_neighbor_force) / 2;
 							}
 
-							//if (scan_counter % SCAN_RATE == 0) 	{
-								//NRF_LOG_RAW_INFO("%d =: ", scan_counter);
-								//NRF_LOG_RAW_INFO("(%d, %d, %d) / (%d, %d, %d)\r\n", i, j, touch_sqr_buf[(TOUCH_SQR_SZ - 1) / 2][(TOUCH_SQR_SZ - 1) / 2], posx, posy, center_force);
-								//NRF_LOG_RAW_INFO("("  NRF_LOG_FLOAT_MARKER ", " NRF_LOG_FLOAT_MARKER ")\r\n", NRF_LOG_FLOAT(posx), NRF_LOG_FLOAT(posy));
-								//NRF_LOG_RAW_INFO("POS=: (%d, %d)\r\n", posx * (1.0 * (REPORT_SCALE - 1) / (COLS - 1)), posy * (((REPORT_SCALE - 1) * (1.0 * ROWS / COLS))/ (ROWS - 1)));
-								/*
-								NRF_LOG_RAW_INFO("HF/VF/TF=: " NRF_LOG_FLOAT_MARKER " / " NRF_LOG_FLOAT_MARKER " / %d\r\n", NRF_LOG_FLOAT(hDelta), NRF_LOG_FLOAT(vDelta), total_force);
-								for (int m = 0; m < TOUCH_SQR_SZ; m++) {
-									for (int n = 0; n < TOUCH_SQR_SZ; n++) {
-										NRF_LOG_RAW_INFO("%d\t", touch_sqr_buf[m][n]);
-									}
-									NRF_LOG_RAW_INFO("\r\n", i, j);
-								}
-								*/
-							//}
+							float distX = 0, distY = 0;
 							
-							if (scan_counter - last_touch.frame_id <= 20) {
-								NRF_LOG_RAW_INFO("MOVE (%d) =: ", scan_counter);
-								NRF_LOG_RAW_INFO("%d, %d\r\n", posx - last_touch.x, posy - last_touch.y);
+							if (scan_counter - last_move.frame_id <= 10) {
+								distX = posx - last_move.x;
+								distY = posy - last_move.y;
 							}
-							
+							else if (scan_counter - last_touch.frame_id <= 5) {
+								distX = posx - last_touch.x;
+								distY = posy - last_touch.y;
+							}
+							float dist = pow((pow(distX, 2) + pow(distY, 2)), 0.5);
+
+							NRF_LOG_RAW_INFO("Frame(%d): ", scan_counter);
+							NRF_LOG_RAW_INFO("(%d, %d) / (" NRF_LOG_FLOAT_MARKER ", " NRF_LOG_FLOAT_MARKER ")", i, j, NRF_LOG_FLOAT(posx), NRF_LOG_FLOAT(posy));
+							NRF_LOG_RAW_INFO(" / (" NRF_LOG_FLOAT_MARKER ", " NRF_LOG_FLOAT_MARKER ")", NRF_LOG_FLOAT(distX), NRF_LOG_FLOAT(distY));
+
+							if (dist > 0) {
+								int16_t moveX, moveY;
+
+								moveX = dist * distX * (scan_counter - last_move.frame_id);
+								moveY = dist * distY * (scan_counter - last_move.frame_id);
+									
+								NRF_LOG_RAW_INFO(",\tMOVE: ", scan_counter);
+								NRF_LOG_RAW_INFO("%d, %d", moveX, moveY);
+								
+								//if (moveX != 0 || moveY !=0) mouse_movement_send(moveX, -moveY);
+
+								last_move.frame_id = scan_counter;
+								last_move.x = posx;
+								last_move.y = posy;
+								last_move.z = center_force;							
+							}
+							NRF_LOG_RAW_INFO("\r\n");
+
 							last_touch.frame_id = scan_counter;
 							last_touch.x = posx;
 							last_touch.y = posy;
@@ -320,7 +344,7 @@ static void application_timer_init(void)
 static void application_timers_start(void)
 {
 		uint32_t err_code;
-    err_code = app_timer_start(m_app_timer_id, TIMER_INTERVAL, NULL);
+    err_code = app_timer_start(m_app_timer_id, SENSOR_SCAN_INTERVAL, NULL);
     APP_ERROR_CHECK(err_code);
 }
 
