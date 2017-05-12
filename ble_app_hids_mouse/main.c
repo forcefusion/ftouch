@@ -116,7 +116,7 @@
 #define INPUT_REP_BUTTONS_LEN           3                                           /**< Length of Mouse Input Report containing button data. */
 #define INPUT_REP_MOVEMENT_LEN          3                                           /**< Length of Mouse Input Report containing movement data. */
 #define INPUT_REP_MEDIA_PLAYER_LEN      1                                           /**< Length of Mouse Input Report containing media player data. */
-#define INPUT_REP_DIGITIZER_LEN		      6                                           /**< Length of Mouse Input Report containing media player data. */
+#define INPUT_REP_DIGITIZER_LEN		      8                                           /**< Length of Mouse Input Report containing media player data. */
 #define INPUT_REP_BUTTONS_INDEX         0                                           /**< Index of Mouse Input Report containing button data. */
 #define INPUT_REP_MOVEMENT_INDEX        1                                           /**< Index of Mouse Input Report containing movement data. */
 #define INPUT_REP_MPLAYER_INDEX         2                                           /**< Index of Mouse Input Report containing media player data. */
@@ -175,7 +175,7 @@ typedef struct
 #define APP_TIMER_OP_QUEUE_SIZE         4                                           /**< Size of timer operation queues. */
 #define SENSOR_SCAN_INTERVAL APP_TIMER_TICKS(1000 / SCAN_RATE, APP_TIMER_PRESCALER)
 
-#define SCAN_RATE			100		// (Hz)
+#define SCAN_RATE			80		// (Hz)
 #define DPI						600
 #define NODE_PER_INCH	5
 #define DPI_PER_SCAN	(1.0 * DPI / SCAN_RATE)
@@ -201,7 +201,7 @@ static uint16_t tact_buf[COLS][ROWS];
 static nrf_saadc_value_t floating_buf[FLOATING_BUF_SIZE][COLS][ROWS];
 static uint8_t floating_buf_idx = 0;
 static uint16_t touch_sqr_buf[TOUCH_SQR_SZ][TOUCH_SQR_SZ];
-static uint32_t scan_counter = 0;
+static uint16_t scan_counter = 0;
 
 touch_event_t last_touch = {
 	.frame_id = 0,
@@ -694,14 +694,15 @@ static void hids_init(void)
 						0x85, 0x04,       // Report Id (4)
 
 						0x75, 0x10,       // Report Size (16)
-						0x95, 0x03,       // Report Count (3)
+						0x95, 0x04,       // Report Count (4)
 
 						0x05, 0x01,       // Usage Page (Generic Desktop)
+						0x09, 0x3B,       // Usage (Byte Count / Frame ID)
 						0x09, 0x30,       // Usage (X)
 						0x09, 0x31,       // Usage (Y)
 						0x09, 0x32,       // Usage (Z)
-						0x16, 0x01, 0xF8, // Logical maximum (2047)
-						0x26, 0xFF, 0x07, // Logical minimum (-2047)
+						0x16, 0x00, 0x00, // Logical minimum (0)
+						0x26, 0xA0, 0xF0, // Logical maximum (4000)
 						0x81, 0x06,       // Input (Data, Variable, Relative)
 					0xC0,             // End Collection (Physical)
         0xC0              // End Collection
@@ -1405,7 +1406,6 @@ static void bsp_event_handler(bsp_event_t event)
             if (m_conn_handle != BLE_CONN_HANDLE_INVALID)
             {
                 //mouse_movement_send(0, MOVEMENT_SPEED);
-								/*
 								buffer = 1 << 4;
 								ble_hids_inp_rep_send(&m_hids,
 											 INPUT_REP_MPLAYER_INDEX,
@@ -1415,14 +1415,7 @@ static void bsp_event_handler(bsp_event_t event)
 								ble_hids_inp_rep_send(&m_hids,
 											 INPUT_REP_MPLAYER_INDEX,
 											 INPUT_REP_MEDIA_PLAYER_LEN,
-											 &buffer);
-								*/
-								uint8_t buf[6] = {255};
-								ble_hids_inp_rep_send(&m_hids,
-											 INPUT_REP_DIGITIZER_INDEX,
-											 INPUT_REP_DIGITIZER_LEN,
-											 buf);
-							
+											 &buffer);						
             }
             break;
 
@@ -1440,7 +1433,7 @@ static void buttons_leds_init(bool * p_erase_bonds)
 {
     bsp_event_t startup_event;
 
-    uint32_t err_code = bsp_init(BSP_INIT_LED | BSP_INIT_BUTTONS,
+    uint32_t err_code = bsp_init(BSP_INIT_BUTTONS,
                                  APP_TIMER_TICKS(100, APP_TIMER_PRESCALER),
                                  bsp_event_handler);
 
@@ -1521,18 +1514,12 @@ void exp_io_out_sel(int line)
 }
 
 
-void exp_io_in_inc(int sel_start, int sel_end)
+void exp_io_in_sel(int pin)
 {
-	if (!nrf_gpio_pin_out_read(sel_start)) {
-		nrf_gpio_pin_toggle(sel_start);
-	}
-	else if (sel_start < sel_end) {
-		nrf_gpio_pin_toggle(sel_start++);
-		exp_io_in_inc(sel_start, sel_end);
-	}
-	else {
-		nrf_gpio_pin_toggle(sel_end);
-	}
+	nrf_gpio_pin_write(ARDUINO_4_PIN, pin & 1);
+	nrf_gpio_pin_write(ARDUINO_5_PIN, pin & 2);
+	nrf_gpio_pin_write(ARDUINO_6_PIN, pin & 4);
+	nrf_gpio_pin_write(ARDUINO_7_PIN, pin & 8);
 }
 
 
@@ -1565,21 +1552,23 @@ bool is_touch_center(uint16_t* ptr, int i, int j)
 		return true;
 }
 
+#define MAP(v, s, e, os, oe) ((v - s) / (e - s) * (oe - os))
 
 void scan_sensors()
 {
-	int j;
 	bool col_sampled[COLS];
+	uint8_t buf[INPUT_REP_DIGITIZER_LEN] = {0};
+
 	memset(col_sampled, 0, sizeof(col_sampled) / 8);
 
 	//if (scan_counter % SCAN_RATE == 0) NRF_LOG_RAW_INFO("SCAN-%d: \r\n", scan_counter);
 	
 	// frame sampling
 	for (int i = 0; i < COLS; i++) {
-		j = 0;
 		exp_io_out_sel(i);
 
-		while (j < ROWS) {
+		for (int j = 0; j < ROWS; j++) {
+			exp_io_in_sel(j);
 			nrf_drv_saadc_sample();
 			nrf_drv_saadc_sample_convert(0, &floating_buf[floating_buf_idx % FLOATING_BUF_SIZE][i][j]);
 
@@ -1593,12 +1582,14 @@ void scan_sensors()
 				NRF_LOG_RAW_INFO("(%d, %d) = %d\r\n", i, j, tact_buf[i][j]);
 			}
 			*/
-			exp_io_in_inc(ARDUINO_4_PIN, ARDUINO_7_PIN);
-			nrf_delay_us(5);
-			j++;
 		}
 	}
 
+	int touchCount = 0;
+	buf[0] = scan_counter & 0xFF;
+	buf[1] = scan_counter >> 8;
+	buf[6] = 0xFF;
+	buf[7] = 0xFF;
 
 	// process frame samples
 	for (int i = 0; i < COLS; i++) {
@@ -1638,62 +1629,30 @@ void scan_sensors()
 								center_force -= hDeviation * (center_force - next_neighbor_force) / 2;
 							}
 
-							float distX = 0, distY = 0, step = 0;
-							
-							if (scan_counter - last_move.frame_id <= 10) {
-								distX = posx - last_move.x;
-								distY = posy - last_move.y;
-								step = scan_counter - last_move.frame_id;
-							}
-							else if (scan_counter - last_touch.frame_id <= 5) {
-								distX = posx - last_touch.x;
-								distY = posy - last_touch.y;
-								step = scan_counter - last_touch.frame_id;
-							}
-							float dist = pow((pow(distX, 2) + pow(distY, 2)), 0.5);
-
+							uint16_t x = MAP(posx, 0, 23, 0, 65535);
+							uint16_t y = MAP(posy, 0, 15, 0, 65535);
+							uint16_t z = center_force;
+							/*
 							NRF_LOG_RAW_INFO("Frame(%d): ", scan_counter);
 							NRF_LOG_RAW_INFO("(%d, %d) / (" NRF_LOG_FLOAT_MARKER ", " NRF_LOG_FLOAT_MARKER ")", i, j, NRF_LOG_FLOAT(posx), NRF_LOG_FLOAT(posy));
-							NRF_LOG_RAW_INFO(" / (" NRF_LOG_FLOAT_MARKER ", " NRF_LOG_FLOAT_MARKER ")", NRF_LOG_FLOAT(distX), NRF_LOG_FLOAT(distY));
-
-							if (dist > 0) {
-								int16_t moveX, moveY;
-
-								moveX = distX / (UNIT_LENGTH * step) * DPI_PER_SCAN;
-								moveY = distY / (UNIT_LENGTH * step) * DPI_PER_SCAN;
-
-								NRF_LOG_RAW_INFO("\r\ndistX: " NRF_LOG_FLOAT_MARKER ", " NRF_LOG_FLOAT_MARKER ", ", NRF_LOG_FLOAT(distX), NRF_LOG_FLOAT(UNIT_LENGTH));
-								NRF_LOG_RAW_INFO("" NRF_LOG_FLOAT_MARKER ", " NRF_LOG_FLOAT_MARKER "\r\n", NRF_LOG_FLOAT(step), NRF_LOG_FLOAT(DPI_PER_SCAN));
-																	
-								if (moveX != 0 || moveY !=0) {
-									NRF_LOG_RAW_INFO(",\tMOVE: ", scan_counter);
-									NRF_LOG_RAW_INFO("%d, %d", moveX, moveY);
-									mouse_movement_send(moveX, -moveY);
-
-									last_move.frame_id = scan_counter;
-									last_move.x = posx;
-									last_move.y = posy;
-									last_move.z = center_force;							
-								}
-							}
 							NRF_LOG_RAW_INFO("\r\n");
-
-							last_touch.frame_id = scan_counter;
-							last_touch.x = posx;
-							last_touch.y = posy;
-							last_touch.z = center_force;							
-
-							uint8_t buf[6];
-							buf[0] = (uint16_t)(posx / 24 * 1920) >> 8;
-							buf[1] = (uint16_t)(posx / 24 * 1920) & 0x00ff;
-							buf[2] = (uint16_t)(posy / 16 * 1080) >> 8;
-							buf[3] = (uint16_t)(posy / 16 * 1080) & 0x00ff;
-							buf[4] = center_force >> 8;
-							buf[5] = center_force & 0x00ff;
-							ble_hids_inp_rep_send(&m_hids,
-										 INPUT_REP_DIGITIZER_INDEX,
-										 INPUT_REP_DIGITIZER_LEN,
-										 buf);
+							NRF_LOG_RAW_INFO("x(%d) y(%d) z(%d)\r\n", x, y, z);
+							*/
+							
+							buf[2] = x & 0xFF;
+							buf[3] = x >> 8;
+							buf[4] = y & 0xFF;
+							buf[5] = y >> 8;
+							buf[6] = z & 0xFF;
+							buf[7] = z >> 8;
+							if (m_conn_handle != BLE_CONN_HANDLE_INVALID) {
+								ble_hids_inp_rep_send(&m_hids,
+											 INPUT_REP_DIGITIZER_INDEX,
+											 INPUT_REP_DIGITIZER_LEN,
+											 buf);
+							}
+							
+							touchCount++;
 					}
 				}
 			}
@@ -1701,7 +1660,14 @@ void scan_sensors()
 	}
 	//if (scan_counter % SCAN_RATE == 0) NRF_LOG_RAW_INFO("\r\n");
 
-	floating_buf_idx++;
+	if ( touchCount == 0) {
+			ble_hids_inp_rep_send(&m_hids,
+						 INPUT_REP_DIGITIZER_INDEX,
+						 INPUT_REP_DIGITIZER_LEN,
+						 buf);
+	}
+	
+	floating_buf_idx = (floating_buf_idx + 1) % FLOATING_BUF_SIZE;
 	scan_counter++;
 }
 
