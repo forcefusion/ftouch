@@ -1,6 +1,6 @@
 #!/usr/bin/sh
 
-export sd=/d/OneDrive/ftouch/softdevice/s132_nrf52_3.1.0_softdevice.hex
+export sd=../../../../softdevice/s132_nrf52_3.1.0_softdevice.hex
 
 make
 mergehex -o nrf52.hex -m $sd _build/nrf52832_xxaa.hex

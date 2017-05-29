@@ -175,16 +175,16 @@ typedef struct
 #define APP_TIMER_OP_QUEUE_SIZE         4                                           /**< Size of timer operation queues. */
 #define SENSOR_SCAN_INTERVAL APP_TIMER_TICKS(1000 / SCAN_RATE, APP_TIMER_PRESCALER)
 
-#define SCAN_RATE			80		// (Hz)
+#define SCAN_RATE			50		// (Hz)
 #define DPI						600
 #define NODE_PER_INCH	5
 #define DPI_PER_SCAN	(1.0 * DPI / SCAN_RATE)
 #define UNIT_LENGTH		(4.0 * NODE_PER_INCH / SCAN_RATE)
-#define OFFSET_VALUE	65
+#define OFFSET_VALUE	32
 #define ROWS 					16
 #define COLS 					24
 #define TACT_BUF_SZ 	ROWS * COLS
-#define TOUCH_SQR_SZ 	5	// odd number only, minimum = 3
+#define TOUCH_SQR_SZ 	3	// odd number only, minimum = 3
 #define REPORT_SCALE 	10
 
 #define DOUT_LINES COLS
@@ -193,15 +193,15 @@ typedef struct
 #define DS ARDUINO_10_PIN
 #define LOW 0
 #define HIGH 1
+#define IO_DELAY 1
 
 #define OFFSET(x, y) (x - y > 0 ? x - y : 0)
 
-#define FLOATING_BUF_SIZE 3
+#define FLOATING_BUF_SIZE 8
 static uint16_t tact_buf[COLS][ROWS];
 static nrf_saadc_value_t floating_buf[FLOATING_BUF_SIZE][COLS][ROWS];
 static uint8_t floating_buf_idx = 0;
 static uint16_t touch_sqr_buf[TOUCH_SQR_SZ][TOUCH_SQR_SZ];
-static uint16_t scan_counter = 0;
 
 touch_event_t last_touch = {
 	.frame_id = 0,
@@ -1467,14 +1467,16 @@ void saadc_init(void)
 
 		nrf_drv_saadc_config_t saadc_config = NRF_DRV_SAADC_DEFAULT_CONFIG;
 		saadc_config.resolution = NRF_SAADC_RESOLUTION_12BIT;
-		//saadc_config.oversample = NRF_SAADC_OVERSAMPLE_4X;
+		//saadc_config.oversample = NRF_SAADC_OVERSAMPLE_2X;
 
 		err_code = nrf_drv_saadc_init(&saadc_config, saadc_callback);
     APP_ERROR_CHECK(err_code);
 
     nrf_saadc_channel_config_t channel_config =
         NRF_DRV_SAADC_DEFAULT_CHANNEL_CONFIG_SE(NRF_SAADC_INPUT_AIN2);
-		channel_config.gain = NRF_SAADC_GAIN1_4;
+		channel_config.reference  = NRF_SAADC_REFERENCE_VDD4;
+		channel_config.gain = NRF_SAADC_GAIN1_2;
+		//channel_config.acq_time   = NRF_SAADC_ACQTIME_20US;
 		//channe_config.burst = NRF_SAADC_BURST_ENABLED;
 
 		err_code = nrf_drv_saadc_channel_init(0, &channel_config);
@@ -1487,8 +1489,8 @@ void exp_io_init()
 		nrf_gpio_range_cfg_output(ARDUINO_4_PIN, ARDUINO_12_PIN);
 
 		// 4067 chip enable pin
-		nrf_gpio_pin_toggle(ARDUINO_11_PIN);		// ARDUINO_A1_PIN read
-		//nrf_gpio_pin_toggle(ARDUINO_12_PIN);		// ARDUINO_A0_PIN read
+		nrf_gpio_pin_write(ARDUINO_11_PIN, HIGH);		// ARDUINO_A1_PIN read
+		//nrf_gpio_pin_write(ARDUINO_12_PIN, HIGH);		// ARDUINO_A0_PIN read
 }
 
 
@@ -1500,17 +1502,19 @@ void exp_io_out_sel(int line)
 	
   nrf_gpio_pin_write(SHCP, LOW);
   nrf_gpio_pin_write(STCP, LOW);
+	nrf_delay_us(IO_DELAY);
 
   for (int i = 0; i < DOUT_LINES; i++) {
     nrf_gpio_pin_write(DS, i == l);
-		nrf_delay_us(1);
+		nrf_delay_us(IO_DELAY);
 		nrf_gpio_pin_write(SHCP, HIGH);
-		nrf_delay_us(1);
+		nrf_delay_us(IO_DELAY);
 		nrf_gpio_pin_write(SHCP, LOW);
-		nrf_delay_us(1);
+		nrf_delay_us(IO_DELAY);
   }
 
   nrf_gpio_pin_write(STCP, HIGH);
+	nrf_delay_us(IO_DELAY);
 }
 
 
@@ -1520,6 +1524,7 @@ void exp_io_in_sel(int pin)
 	nrf_gpio_pin_write(ARDUINO_5_PIN, pin & 2);
 	nrf_gpio_pin_write(ARDUINO_6_PIN, pin & 4);
 	nrf_gpio_pin_write(ARDUINO_7_PIN, pin & 8);
+	nrf_delay_us(IO_DELAY);
 }
 
 
@@ -1554,15 +1559,29 @@ bool is_touch_center(uint16_t* ptr, int i, int j)
 
 #define MAP(v, s, e, os, oe) ((v - s) / (e - s) * (oe - os))
 
+static uint16_t no_touch_count = 0;
+static uint16_t sleep_count = 0;
+
 void scan_sensors()
 {
+	uint32_t timestamp = app_timer_cnt_get() / 32;
+
+	if (no_touch_count >= SCAN_RATE * 60) {
+		sleep_count++;
+		
+		if  (sleep_count > SCAN_RATE) {
+			sleep_count = 0;
+		}
+		else {
+			return;
+		}
+	}
+	
 	bool col_sampled[COLS];
 	uint8_t buf[INPUT_REP_DIGITIZER_LEN] = {0};
 
 	memset(col_sampled, 0, sizeof(col_sampled) / 8);
 
-	//if (scan_counter % SCAN_RATE == 0) NRF_LOG_RAW_INFO("SCAN-%d: \r\n", scan_counter);
-	
 	// frame sampling
 	for (int i = 0; i < COLS; i++) {
 		exp_io_out_sel(i);
@@ -1577,17 +1596,12 @@ void scan_sensors()
 			tact_buf[i][j] = OFFSET(floating_buf_sum / FLOATING_BUF_SIZE, OFFSET_VALUE);
 			col_sampled[i] |= tact_buf[i][j] > 0;
 
-			/*
-			if (tact_buf[i][j] > 0 && scan_counter % SCAN_RATE == 0) {
-				NRF_LOG_RAW_INFO("(%d, %d) = %d\r\n", i, j, tact_buf[i][j]);
-			}
-			*/
 		}
 	}
 
 	int touchCount = 0;
-	buf[0] = scan_counter & 0xFF;
-	buf[1] = scan_counter >> 8;
+	buf[0] = timestamp & 0xFF;
+	buf[1] = (timestamp >> 8) & 0xFF;
 	buf[6] = 0xFF;
 	buf[7] = 0xFF;
 
@@ -1633,7 +1647,7 @@ void scan_sensors()
 							uint16_t y = MAP(posy, 0, 15, 0, 65535);
 							uint16_t z = center_force;
 							/*
-							NRF_LOG_RAW_INFO("Frame(%d): ", scan_counter);
+							NRF_LOG_RAW_INFO("Frame(%d): ", timestamp);
 							NRF_LOG_RAW_INFO("(%d, %d) / (" NRF_LOG_FLOAT_MARKER ", " NRF_LOG_FLOAT_MARKER ")", i, j, NRF_LOG_FLOAT(posx), NRF_LOG_FLOAT(posy));
 							NRF_LOG_RAW_INFO("\r\n");
 							NRF_LOG_RAW_INFO("x(%d) y(%d) z(%d)\r\n", x, y, z);
@@ -1658,17 +1672,20 @@ void scan_sensors()
 			}
 		}
 	}
-	//if (scan_counter % SCAN_RATE == 0) NRF_LOG_RAW_INFO("\r\n");
 
 	if ( touchCount == 0) {
 			ble_hids_inp_rep_send(&m_hids,
 						 INPUT_REP_DIGITIZER_INDEX,
 						 INPUT_REP_DIGITIZER_LEN,
 						 buf);
+			if (no_touch_count < SCAN_RATE * 60) no_touch_count++;
+	}
+	else {
+		no_touch_count = 0;
+		sleep_count = 0;
 	}
 	
 	floating_buf_idx = (floating_buf_idx + 1) % FLOATING_BUF_SIZE;
-	scan_counter++;
 }
 
 void timer_timeout_handler(void * p_context) 
